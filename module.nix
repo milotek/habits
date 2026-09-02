@@ -41,7 +41,8 @@ in {
         ExecStart = lib.getExe cfg.package;
         WorkingDirectory = "/var/lib/habits";
         StateDirectory = "habits";
-        DynamicUser = true;
+        User = "habits";
+        Group = "habits";
         Restart = "on-failure";
 
         CapabilityBoundingSet = [""];
@@ -68,6 +69,12 @@ in {
         SystemCallFilter = ["@system-service" "~@privileged" "~@resources"];
       };
     };
+
+    users.users.habits = {
+      isSystemUser = true;
+      group = "habits";
+    };
+    users.groups.habits = {};
 
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [cfg.port];
   };
