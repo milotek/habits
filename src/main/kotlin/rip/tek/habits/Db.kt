@@ -147,12 +147,12 @@ private data class Seed(
 // Catppuccin Mocha, matching the rest of tek.rip. target > 1 makes a habit a
 // counter: the square shades by value/target instead of on/off.
 private val SEED = listOf(
-    Seed("clean", "∅", 1, "#cba6f7"),
-    Seed("midnight", "☾", 1, "#b4befe"),
-    Seed("wake", "☀", 1, "#f9e2af"),
-    Seed("gym", "△", 1, "#fab387"),
-    Seed("leetcode", "⬡", 3, "#a6e3a1"),
-    Seed("cls", "⑂", 2, "#74c7ec"),
-    Seed("bugs", "✳", 2, "#f38ba8"),
-    Seed("note", "✎", 1, "#94e2d5"),
+    Seed("clean", "block", 1, "#cba6f7"),
+    Seed("midnight", "dark_mode", 1, "#b4befe"),
+    Seed("wake", "light_mode", 1, "#f9e2af"),
+    Seed("gym", "change_history", 1, "#fab387"),
+    Seed("leetcode", "hexagon", 3, "#a6e3a1"),
+    Seed("cls", "diamond", 2, "#74c7ec"),
+    Seed("bugs", "asterisk", 2, "#f38ba8"),
+    Seed("note", "edit", 1, "#94e2d5"),
 )

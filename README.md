@@ -70,3 +70,22 @@ database on the server, where they stay private:
 sqlite3 /var/lib/habits/habits.db \
   "update habits set name = 'gym' where slug = 'gym';"
 ```
+
+## Icons
+
+`src/main/resources/icons.woff2` is Material Symbols Outlined, subset to the
+eight glyphs this app uses — 11 MB down to under 7 KB. It is vendored rather
+than fetched so the page needs no external request, and served same-origin at
+`/icons.woff2`.
+
+Glyphs are addressed by codepoint, not by ligature name, which is what allows
+the subset to drop its layout tables. To change an icon you need both a new
+codepoint in `GLYPHS` and a re-subset:
+
+```sh
+pyftsubset "MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf" \
+  --unicodes=f08c,e51c,e518,e86b,eb39,ead5,f525,f097 \
+  --layout-features= --flavor=woff2 --output-file=src/main/resources/icons.woff2
+```
+
+Material Symbols is Apache-2.0, which permits redistribution.

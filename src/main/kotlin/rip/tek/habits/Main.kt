@@ -1,9 +1,11 @@
 package rip.tek.habits
 
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.html.*
 import io.ktor.server.netty.*
+import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.html.*
 import java.time.LocalDate
@@ -28,13 +30,19 @@ fun main() {
                             div("row") {
                                 span("icon") {
                                     style = "color: ${habit.colour}"
-                                    +habit.icon
+                                    +glyph(habit.icon)
                                 }
                                 span("val") { +"${db.valueOn(habit.id, today)} / ${habit.target}" }
                             }
                         }
                     }
                 }
+            }
+
+            get("/icons.woff2") {
+                val bytes = checkNotNull(Db::class.java.getResourceAsStream("/icons.woff2")).readBytes()
+                call.response.header(HttpHeaders.CacheControl, "public, max-age=31536000, immutable")
+                call.respondBytes(bytes, ContentType("font", "woff2"))
             }
 
             // TODO(you): GET /?kiosk -> same grid, no buttons, meta-refresh so the
@@ -50,7 +58,28 @@ fun main() {
     }.start(wait = true)
 }
 
+// Material Symbols glyphs live in the private use area, and icons.woff2 is
+// subset to exactly these eight. Addressing them by codepoint rather than by
+// ligature is what lets the subset drop its layout tables.
+private val GLYPHS = mapOf(
+    "block" to "",
+    "dark_mode" to "",
+    "light_mode" to "",
+    "change_history" to "",
+    "hexagon" to "",
+    "diamond" to "",
+    "asterisk" to "",
+    "edit" to "",
+)
+
+private fun glyph(name: String) = GLYPHS[name] ?: "?"
+
 private val CSS = """
+    @font-face {
+      font-family: 'Material Symbols Outlined';
+      src: url('/icons.woff2') format('woff2');
+      font-display: block;
+    }
     :root { --bg: #11111b; --fg: #cdd6f4; --dim: #45475a; }
     body {
       background: var(--bg);
@@ -60,6 +89,13 @@ private val CSS = """
       padding: 2rem;
     }
     .row { display: flex; align-items: center; gap: 1rem; padding: 0.35rem 0; }
-    .icon { font-size: 1.4rem; width: 1.6rem; text-align: center; }
+    .icon {
+      font-family: 'Material Symbols Outlined';
+      font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+      font-size: 1.5rem;
+      line-height: 1;
+      width: 1.6rem;
+      text-align: center;
+    }
     .val { color: var(--dim); }
 """.trimIndent()
