@@ -1,0 +1,6 @@
+.gradle/
+build/
+result
+*.db
+*.db-shm
+*.db-wal
