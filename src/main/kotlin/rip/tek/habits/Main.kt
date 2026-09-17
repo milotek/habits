@@ -5,6 +5,7 @@ import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.html.*
 import io.ktor.server.netty.*
+import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.html.*
@@ -25,14 +26,18 @@ fun main() {
                 val habit = db.habits().find { it.slug == call.parameters["slug"] }
                 if (habit == null) {
                     call.respond(HttpStatusCode.NotFound)
-                } else {
-                    val today = LocalDate.now()
-                    // Wrapping past target back to zero is the only way to undo a
-                    // mistap: there is no separate clear button on a wall display.
-                    val next = (db.valueOn(habit.id, today) + 1) % (habit.target + 1)
-                    db.set(habit.id, today, next)
-                    call.respondRedirect("/")
+                    return@post
                 }
+                val day = call.receiveParameters()["day"]?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                if (day == null) {
+                    call.respond(HttpStatusCode.BadRequest)
+                    return@post
+                }
+                // Wrapping past target back to zero is the only way to undo a
+                // mistap: there is no separate clear button on the display.
+                val next = (db.valueOn(habit.id, day) + 1) % (habit.target + 1)
+                db.set(habit.id, day, next)
+                call.respondRedirect(if (call.request.queryParameters.contains("kiosk")) "/?kiosk" else "/")
             }
 
             get("/icons.woff2") {
@@ -55,8 +60,8 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
     head {
         title("habits")
         meta(name = "viewport", content = "width=device-width, initial-scale=1")
-        // The wall display is never touched, so it reloads itself to pick up
-        // ticks made from a phone.
+        // The display reloads itself so that ticks made from a phone show up on
+        // the wall without anyone walking over to it.
         if (kiosk) {
             meta {
                 httpEquiv = "refresh"
@@ -69,19 +74,18 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
         div("board") {
             habits.forEach { habit ->
                 val days = values[habit.id] ?: emptyMap()
-                div("habit") {
-                    if (kiosk) {
-                        span("icon") {
-                            style = "color: ${habit.colour}"
-                            +glyph(habit.icon)
-                        }
-                    } else {
-                        form(action = "/tick/${habit.slug}", method = FormMethod.post) {
-                            button(classes = "icon") {
-                                style = "color: ${habit.colour}"
-                                +glyph(habit.icon)
-                            }
-                        }
+                // One form for the whole row rather than one per square: a submit
+                // button carries its own name/value, so the day costs an attribute
+                // instead of 365 nested forms.
+                form(
+                    action = "/tick/${habit.slug}" + if (kiosk) "?kiosk" else "",
+                    method = FormMethod.post,
+                    classes = "habit",
+                ) {
+                    button(name = "day", classes = "icon") {
+                        value = today.toString()
+                        style = "color: ${habit.colour}"
+                        +glyph(habit.icon)
                     }
                     div("grid") {
                         // Pad to the weekday of the first day so that every column
@@ -89,7 +93,8 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                         repeat(start.dayOfWeek.value - 1) { div("cell pad") }
                         for (i in 0 until DAYS) {
                             val day = start.plusDays(i.toLong())
-                            div(if (day == today) "cell today" else "cell") {
+                            button(name = "day", classes = if (day == today) "cell today" else "cell") {
+                                value = day.toString()
                                 style = "background: ${shade(habit.colour, days[day] ?: 0, habit.target)}"
                             }
                         }
@@ -143,7 +148,7 @@ private val CSS = """
     /* 53 columns do not fit a phone, and this is ticked from a phone. The grid
        scrolls; the icon stays pinned so the row being ticked stays identifiable. */
     .board { overflow-x: auto; display: flex; flex-direction: column; gap: 0.9rem; }
-    .habit { display: flex; align-items: center; gap: 0.9rem; width: max-content; }
+    .habit { display: flex; align-items: center; gap: 0.9rem; width: max-content; margin: 0; }
     .icon {
       font-family: 'Material Symbols Outlined';
       font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
@@ -154,13 +159,9 @@ private val CSS = """
       position: sticky;
       left: 0;
       background: var(--bg);
-    }
-    button.icon {
       border: 0;
       padding: 0;
       cursor: pointer;
-      font-family: 'Material Symbols Outlined';
-      font-size: 1.5rem;
     }
     .grid {
       display: grid;
@@ -170,6 +171,10 @@ private val CSS = """
       gap: 3px;
     }
     .cell { border-radius: 2px; background: var(--empty); }
+    button.cell { appearance: none; border: 0; padding: 0; cursor: pointer; }
     .pad { background: transparent; }
     .today { outline: 1px solid var(--dim); outline-offset: 1px; }
+    /* A 10px square is a small target for a pointer, so the one under the cursor
+       says so before it is clicked. Last, to win over .today. */
+    .cell:hover, .cell:focus-visible { outline: 1px solid var(--fg); outline-offset: 1px; }
 """.trimIndent()
