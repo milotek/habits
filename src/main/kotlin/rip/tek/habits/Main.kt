@@ -11,6 +11,7 @@ import io.ktor.server.routing.*
 import kotlinx.html.*
 import java.security.MessageDigest
 import java.time.LocalDate
+import kotlin.math.ceil
 
 fun main() {
     val port = System.getenv("HABITS_PORT")?.toInt() ?: 8095
@@ -67,6 +68,10 @@ private const val DAYS = 365
 // single row to fill, so the same run has to read as a longer object there.
 private const val PITCH = 17
 
+// Both views show this much history. Whole weeks, so every grid column is a
+// full one, and few enough of them that the bar still fits a wall display.
+private const val WEEKS = 8
+
 private fun HTML.board(db: Db, kiosk: Boolean) {
     val habits = db.habits()
     val today = LocalDate.now()
@@ -89,7 +94,8 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
     body {
         div("board") {
             habits.forEach { habit ->
-                val run = runOf(values[habit.id] ?: emptyMap(), today)
+                val days = values[habit.id] ?: emptyMap()
+                val run = runOf(days, today)
                 form(
                     action = "/tick/${habit.slug}" + if (kiosk) "?kiosk" else "",
                     method = FormMethod.post,
@@ -106,8 +112,8 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                     // Both views are always rendered; the belt slides whichever
                     // one is off-screen, so nothing left of the pane can move.
                     div("pane") {
-                        div("view") { grid(run, todayRow) }
-                        div("view") { bar(run) }
+                        div("view") { grid(days, habit, today, todayRow) }
+                        div("view") { bar(days, today, todayRow) }
                     }
                 }
             }
@@ -115,32 +121,62 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
     }
 }
 
-private fun DIV.grid(run: Run, todayRow: Int) {
+private fun DIV.grid(days: Map<LocalDate, Int>, habit: Habit, today: LocalDate, todayRow: Int) {
     div("grid") {
-        val last = run.length - 1 + run.offset
-        // Only as many week columns as the run actually reaches, so a broken run
-        // leaves the grid genuinely empty instead of drawing a field of blanks.
-        val cols = if (run.length == 0) 0 else ((6 - todayRow) + last) / 7 + 1
-        for (c in 0 until cols) {
+        for (c in 0 until WEEKS) {
             for (r in 0..6) {
                 val ago = c * 7 + todayRow - r
-                div(
-                    when {
-                        run.pending && ago == 0 -> "cell open"
-                        ago >= run.offset && ago <= last -> "cell on"
-                        else -> "cell"
-                    }
-                )
+                val value = days[today.minusDays(ago.toLong())] ?: 0
+                when {
+                    // Later this week: a day that has not happened is not a miss.
+                    ago < 0 -> div("cell pad")
+                    ago == 0 && value == 0 -> div("cell open")
+                    else -> div("cell") { style = "background: ${shade(habit.colour, value, habit.target)}" }
+                }
             }
         }
     }
 }
 
-private fun DIV.bar(run: Run) {
-    if (run.length == 0) return
-    div(if (run.pending) "bar open" else "bar") {
-        style = "width: ${(run.length + run.offset) * PITCH - 3}px"
+private fun DIV.bar(days: Map<LocalDate, Int>, today: LocalDate, todayRow: Int) {
+    div("strip") {
+        segments(days, today, (WEEKS - 1) * 7 + todayRow).forEach { seg ->
+            div("bar ${seg.kind}") { style = "width: ${seg.days * PITCH - 3}px" }
+        }
     }
+}
+
+private class Segment(val kind: String, val days: Int)
+
+/**
+ * The same days the grid draws, collapsed into runs and the gaps between them,
+ * newest first. Today is its own segment while it is still untouched, because a
+ * day in progress is not yet a gap.
+ */
+private fun segments(days: Map<LocalDate, Int>, today: LocalDate, maxAgo: Int): List<Segment> {
+    val out = mutableListOf<Segment>()
+    for (ago in 0..maxAgo) {
+        val done = (days[today.minusDays(ago.toLong())] ?: 0) > 0
+        val kind = when {
+            ago == 0 && !done -> "open"
+            done -> "run"
+            else -> "gap"
+        }
+        val last = out.lastOrNull()
+        if (last != null && last.kind == kind) out[out.lastIndex] = Segment(kind, last.days + 1)
+        else out.add(Segment(kind, 1))
+    }
+    return out
+}
+
+// Four steps rather than a continuous ramp: adjacent days have to be tellable
+// apart at a glance from across a room, which a smooth gradient does not manage.
+private val STEPS = listOf("40", "73", "b3", "ff")
+
+private fun shade(colour: String, value: Int, target: Int): String {
+    if (value <= 0) return "var(--empty)"
+    val ratio = (value.toDouble() / target).coerceIn(0.0, 1.0)
+    return colour + STEPS[(ceil(ratio * STEPS.size).toInt() - 1).coerceIn(0, STEPS.lastIndex)]
 }
 
 /**
@@ -189,7 +225,7 @@ private val CSS = """
       src: url('$ICONS_PATH') format('woff2');
       font-display: block;
     }
-    :root { --bg: #11111b; --fg: #cdd6f4; --cold: #313244; --gone: #585b70; }
+    :root { --bg: #11111b; --fg: #cdd6f4; --empty: #313244; --gone: #585b70; }
     body {
       background: var(--bg);
       color: var(--fg);
@@ -228,10 +264,10 @@ private val CSS = """
     }
     .tile.hot { background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid var(--c); color: var(--c); }
     .tile.pending { background: transparent; border: 1px dashed color-mix(in srgb, var(--c) 55%, transparent); color: color-mix(in srgb, var(--c) 72%, transparent); }
-    .tile.cold { background: var(--cold); border: 1px solid transparent; color: var(--gone); }
+    .tile.cold { background: var(--empty); border: 1px solid transparent; color: var(--gone); }
     .tile:hover, .tile:focus-visible { outline: 1px solid var(--fg); outline-offset: 2px; }
-    /* Weekday rows and week columns like a contribution graph, but only the live
-       run is drawn: newest week on the left, older weeks to the right. */
+    /* Weekday rows and week columns like a contribution graph: newest week on
+       the left, older weeks to the right, every day in the window drawn. */
     .grid {
       display: grid;
       grid-auto-flow: column;
@@ -240,10 +276,15 @@ private val CSS = """
       gap: 3px;
       height: 88px;
     }
-    .cell { width: 10px; height: 10px; border-radius: 2px; background: transparent; }
-    .cell.on { background: var(--c); }
-    .cell.open { border: 1px dashed color-mix(in srgb, var(--c) 70%, transparent); box-sizing: border-box; }
-    .bar { height: 88px; border-radius: 6px; background: var(--c); flex: none; }
+    .cell { width: 10px; height: 10px; border-radius: 2px; }
+    .pad { background: transparent; }
+    .cell.open { background: transparent; border: 1px dashed color-mix(in srgb, var(--c) 70%, transparent); box-sizing: border-box; }
+    /* The same days as one strip: a run is a pill, a miss is the thin rail it
+       sits on, so the length of a streak is a length rather than a number. */
+    .strip { display: flex; align-items: center; gap: 3px; height: 88px; }
+    .bar { height: 88px; border-radius: 6px; flex: none; }
+    .bar.run { background: var(--c); }
+    .bar.gap { height: 8px; border-radius: 4px; background: var(--empty); }
     .bar.open { background: transparent; border: 1px dashed color-mix(in srgb, var(--c) 70%, transparent); box-sizing: border-box; }
     /* The pane is per row rather than around the whole board so that the swap
        moves only the run, never the icon or the tile. */
