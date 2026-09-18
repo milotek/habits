@@ -48,12 +48,25 @@ class Db(path: String) {
                 )
                 """.trimIndent()
             )
+            // `midnight` was renamed to `sleep`. Renaming the row rather than
+            // seeding a new slug is what keeps the habit's completions attached.
+            st.executeUpdate("update habits set slug = 'sleep' where slug = 'midnight'")
         }
         seed()
     }
 
     private fun seed() {
-        val sql = "insert or ignore into habits (slug, name, icon, target, colour, position) values (?, ?, ?, ?, ?, ?)"
+        // SEED is the source of truth for how a habit looks, so a redeploy restyles
+        // rows that already exist. `name` is left alone: it is the one column
+        // meant to be edited on the server.
+        val sql = """
+            insert into habits (slug, name, icon, target, colour, position) values (?, ?, ?, ?, ?, ?)
+            on conflict(slug) do update set
+              icon = excluded.icon,
+              target = excluded.target,
+              colour = excluded.colour,
+              position = excluded.position
+        """.trimIndent()
         conn.prepareStatement(sql).use { ps ->
             SEED.forEachIndexed { i, h ->
                 ps.setString(1, h.slug)
@@ -65,6 +78,14 @@ class Db(path: String) {
                 ps.addBatch()
             }
             ps.executeBatch()
+        }
+        // A habit dropped from SEED is off the board, so take its rows with it
+        // instead of leaving an invisible habit and its completions behind. The
+        // slugs are source constants, never user input.
+        val kept = SEED.joinToString(", ") { "'${it.slug}'" }
+        conn.createStatement().use { st ->
+            st.executeUpdate("delete from completions where habit_id in (select id from habits where slug not in ($kept))")
+            st.executeUpdate("delete from habits where slug not in ($kept)")
         }
     }
 
@@ -144,15 +165,16 @@ private data class Seed(
 // undo the point of showing only icons on the display. Set `name` in the
 // database on the server if you ever want labels.
 //
-// Catppuccin Mocha, matching the rest of tek.rip. target > 1 makes a habit a
-// counter: the square shades by value/target instead of on/off.
+// Catppuccin Mocha accents walked in palette order from red to mauve, so the
+// board reads top to bottom as a rainbow. target > 1 makes a habit a counter:
+// it takes that many taps to cycle a day back to empty.
 private val SEED = listOf(
-    Seed("clean", "block", 1, "#cba6f7"),
-    Seed("midnight", "dark_mode", 1, "#b4befe"),
-    Seed("wake", "light_mode", 1, "#f9e2af"),
-    Seed("gym", "change_history", 1, "#fab387"),
-    Seed("leetcode", "hexagon", 3, "#a6e3a1"),
-    Seed("cls", "diamond", 2, "#74c7ec"),
-    Seed("bugs", "asterisk", 2, "#f38ba8"),
-    Seed("note", "edit", 1, "#94e2d5"),
+    Seed("clean", "block", 1, "#f38ba8"),
+    Seed("wake", "light_mode", 1, "#fab387"),
+    Seed("sleep", "dark_mode", 1, "#f9e2af"),
+    Seed("gym", "fitness_center", 1, "#a6e3a1"),
+    Seed("leetcode", "code", 3, "#94e2d5"),
+    Seed("cls", "bolt", 2, "#74c7ec"),
+    Seed("office", "work", 1, "#89b4fa"),
+    Seed("note", "edit", 1, "#cba6f7"),
 )

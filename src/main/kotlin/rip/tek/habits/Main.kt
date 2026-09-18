@@ -78,7 +78,7 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
     body {
         div("board") {
             habits.forEach { habit ->
-                val run = runOf(values[habit.id] ?: emptyMap(), habit.target, today)
+                val run = runOf(values[habit.id] ?: emptyMap(), today)
                 form(
                     action = "/tick/${habit.slug}" + if (kiosk) "?kiosk" else "",
                     method = FormMethod.post,
@@ -142,10 +142,10 @@ private data class Run(val length: Int, val pending: Boolean) {
     val state = if (length == 0) "cold" else if (pending) "pending" else "hot"
 }
 
-private fun runOf(days: Map<LocalDate, Int>, target: Int, today: LocalDate): Run {
-    // A counter habit only counts as a day once it reaches its target; a partial
-    // day is a miss, otherwise the target would mean nothing.
-    fun done(day: LocalDate) = (days[day] ?: 0) >= target
+private fun runOf(days: Map<LocalDate, Int>, today: LocalDate): Run {
+    // Any progress keeps the run alive: 2 of 3 is still a day you showed up, and
+    // the streak is about showing up. The target only sets the tick cycle.
+    fun done(day: LocalDate) = (days[day] ?: 0) > 0
 
     val pending = !done(today) && done(today.minusDays(1))
     val end = if (pending) today.minusDays(1) else today
@@ -161,12 +161,12 @@ private fun runOf(days: Map<LocalDate, Int>, target: Int, today: LocalDate): Run
 // ligature is what lets the subset drop its layout tables.
 private val GLYPHS = mapOf(
     "block" to "",
-    "dark_mode" to "",
     "light_mode" to "",
-    "change_history" to "",
-    "hexagon" to "",
-    "diamond" to "",
-    "asterisk" to "",
+    "dark_mode" to "",
+    "fitness_center" to "",
+    "code" to "",
+    "bolt" to "",
+    "work" to "",
     "edit" to "",
 )
 
