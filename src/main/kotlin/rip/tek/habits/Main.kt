@@ -68,10 +68,6 @@ private const val DAYS = 365
 // single row to fill, so the same run has to read as a longer object there.
 private const val PITCH = 17
 
-// Both views show this much history. Whole weeks, so every grid column is a
-// full one, and few enough of them that the bar still fits a wall display.
-private const val WEEKS = 8
-
 private fun HTML.board(db: Db, kiosk: Boolean) {
     val habits = db.habits()
     val today = LocalDate.now()
@@ -113,7 +109,7 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                     // one is off-screen, so nothing left of the pane can move.
                     div("pane") {
                         div("view") { grid(days, habit, run, today, todayRow) }
-                        div("view") { bar(days, habit, run, today, todayRow) }
+                        div("view") { bar(run) }
                     }
                 }
             }
@@ -123,31 +119,34 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
 
 private fun DIV.grid(days: Map<LocalDate, Int>, habit: Habit, run: Run, today: LocalDate, todayRow: Int) {
     div("grid") {
-        for (c in 0 until WEEKS) {
+        val first = run.offset
+        val last = first + run.span - 1
+        // Only as many week columns as the run actually reaches, so a dead habit
+        // leaves the grid genuinely empty rather than drawing a field of blanks.
+        val cols = if (run.span == 0) 0 else ((6 - todayRow) + last) / 7 + 1
+        for (c in 0 until cols) {
             for (r in 0..6) {
                 val ago = c * 7 + todayRow - r
-                val value = coverOn(days, habit.cadence, today.minusDays(ago.toLong()))
                 when {
-                    // A tick fills the whole stretch it covers, so a habit with
-                    // rest days draws one block rather than a dotted line.
-                    value > 0 -> div("cell") { style = "background: ${shade(habit.colour, value, habit.target)}" }
-                    // Later this week and not yet covered: not a miss, just not here.
-                    ago < 0 -> div("cell pad")
-                    // Dashed only while the run is alive and today is what it is
-                    // waiting on. On a dead row it would just be noise.
-                    ago == 0 && run.pending -> div("cell open")
-                    else -> div("cell") { style = "background: var(--empty)" }
+                    run.pending && ago == 0 -> div("cell open")
+                    ago in first..last -> {
+                        val value = coverOn(days, habit.cadence, today.minusDays(ago.toLong()))
+                        div("cell") { style = "background: ${shade(habit.colour, value, habit.target)}" }
+                    }
+                    else -> div("cell")
                 }
             }
         }
     }
 }
 
-private fun DIV.bar(days: Map<LocalDate, Int>, habit: Habit, run: Run, today: LocalDate, todayRow: Int) {
+private fun DIV.bar(run: Run) {
+    if (run.span == 0) return
     div("strip") {
-        segments(days, habit.cadence, run, today, (WEEKS - 1) * 7 + todayRow).forEach { seg ->
-            div("bar ${seg.kind}") { style = "width: ${seg.days * PITCH - 3}px" }
-        }
+        // The run is contiguous by construction - that is what makes it a run -
+        // so it is one pill however many rest days its cadence let through.
+        if (run.pending) div("bar open") { style = "width: ${PITCH - 3}px" }
+        div("bar run") { style = "width: ${run.span * PITCH - 3}px" }
     }
 }
 
@@ -161,29 +160,6 @@ private fun coverOn(days: Map<LocalDate, Int>, cadence: Int, day: LocalDate): In
         if (value > 0) return value
     }
     return 0
-}
-
-private class Segment(val kind: String, val days: Int)
-
-/**
- * The same days the grid draws, collapsed into runs and the gaps between them,
- * newest first. Today is its own segment while it is still untouched, because a
- * day in progress is not yet a gap.
- */
-private fun segments(days: Map<LocalDate, Int>, cadence: Int, run: Run, today: LocalDate, maxAgo: Int): List<Segment> {
-    val out = mutableListOf<Segment>()
-    for (ago in 0..maxAgo) {
-        val done = coverOn(days, cadence, today.minusDays(ago.toLong())) > 0
-        val kind = when {
-            ago == 0 && !done -> if (run.pending) "open" else "gap"
-            done -> "run"
-            else -> "gap"
-        }
-        val last = out.lastOrNull()
-        if (last != null && last.kind == kind) out[out.lastIndex] = Segment(kind, last.days + 1)
-        else out.add(Segment(kind, 1))
-    }
-    return out
 }
 
 // Four steps rather than a continuous ramp: adjacent days have to be tellable
@@ -200,27 +176,31 @@ private fun shade(colour: String, value: Int, target: Int): String {
  * The current run only, snapstreak style: a miss resets it to zero and takes the
  * history with it. [length] counts ticks rather than days, so a habit with rest
  * days and a daily one both read as the number of times the habit came round and
- * was kept. [pending] means the run is alive but today is not covered yet.
+ * was kept, while [span] is the stretch of days those ticks cover between them.
+ * [pending] means the run is alive but today is not covered yet.
  */
-private data class Run(val length: Int, val pending: Boolean) {
+private data class Run(val length: Int, val span: Int, val pending: Boolean) {
+    val offset = if (pending) 1 else 0
     val state = if (length == 0) "cold" else if (pending) "pending" else "hot"
 }
 
 private fun runOf(days: Map<LocalDate, Int>, cadence: Int, today: LocalDate): Run {
     val ticks = days.filterValues { it > 0 }.keys.filter { it <= today }.sortedDescending()
-    val last = ticks.firstOrNull() ?: return Run(0, false)
+    val last = ticks.firstOrNull() ?: return Run(0, 0, false)
 
     // Coverage runs forward from a tick, so the run survives while it still
     // reaches yesterday: today is the day the habit comes due, not the day it is
     // lost. At cadence 1 that is the ordinary "ticked today or yesterday".
-    if (last < today.minusDays(cadence.toLong())) return Run(0, false)
+    if (last < today.minusDays(cadence.toLong())) return Run(0, 0, false)
 
     var length = 1
     for (i in 1 until ticks.size) {
         if (ticks[i - 1].toEpochDay() - ticks[i].toEpochDay() > cadence) break
         length++
     }
-    return Run(length, last < today.minusDays((cadence - 1).toLong()))
+    val pending = last < today.minusDays((cadence - 1).toLong())
+    val oldest = today.toEpochDay() - ticks[length - 1].toEpochDay()
+    return Run(length, (oldest - (if (pending) 1 else 0) + 1).toInt(), pending)
 }
 
 // Material Symbols glyphs live in the private use area, and icons.woff2 is
@@ -286,8 +266,8 @@ private val CSS = """
     .tile.pending { background: transparent; border: 1px dashed color-mix(in srgb, var(--c) 55%, transparent); color: color-mix(in srgb, var(--c) 72%, transparent); }
     .tile.cold { background: var(--empty); border: 1px solid transparent; color: var(--gone); }
     .tile:hover, .tile:focus-visible { outline: 1px solid var(--fg); outline-offset: 2px; }
-    /* Weekday rows and week columns like a contribution graph: newest week on
-       the left, older weeks to the right, every day in the window drawn. */
+    /* Weekday rows and week columns like a contribution graph, but only the live
+       run is drawn: newest week on the left, older weeks to the right. */
     .grid {
       display: grid;
       grid-auto-flow: column;
@@ -296,15 +276,12 @@ private val CSS = """
       gap: 3px;
       height: 88px;
     }
-    .cell { width: 10px; height: 10px; border-radius: 2px; }
-    .pad { background: transparent; }
+    .cell { width: 10px; height: 10px; border-radius: 2px; background: transparent; }
     .cell.open { background: transparent; border: 1px dashed color-mix(in srgb, var(--c) 70%, transparent); box-sizing: border-box; }
-    /* The same days as one strip: a run is a pill, a miss is the thin rail it
-       sits on, so the length of a streak is a length rather than a number. */
+    /* The same run as one pill, so its length is a length rather than a number. */
     .strip { display: flex; align-items: center; gap: 3px; height: 88px; }
     .bar { height: 88px; border-radius: 6px; flex: none; }
     .bar.run { background: var(--c); }
-    .bar.gap { height: 8px; border-radius: 4px; background: var(--empty); }
     .bar.open { background: transparent; border: 1px dashed color-mix(in srgb, var(--c) 70%, transparent); box-sizing: border-box; }
     /* The pane is per row rather than around the whole board so that the swap
        moves only the run, never the icon or the tile. */
