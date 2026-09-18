@@ -95,7 +95,7 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
         div("board") {
             habits.forEach { habit ->
                 val days = values[habit.id] ?: emptyMap()
-                val run = runOf(days, today)
+                val run = runOf(days, habit.cadence, today)
                 form(
                     action = "/tick/${habit.slug}" + if (kiosk) "?kiosk" else "",
                     method = FormMethod.post,
@@ -112,8 +112,8 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                     // Both views are always rendered; the belt slides whichever
                     // one is off-screen, so nothing left of the pane can move.
                     div("pane") {
-                        div("view") { grid(days, habit, today, todayRow) }
-                        div("view") { bar(days, today, todayRow) }
+                        div("view") { grid(days, habit, run, today, todayRow) }
+                        div("view") { bar(days, habit, run, today, todayRow) }
                     }
                 }
             }
@@ -121,29 +121,46 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
     }
 }
 
-private fun DIV.grid(days: Map<LocalDate, Int>, habit: Habit, today: LocalDate, todayRow: Int) {
+private fun DIV.grid(days: Map<LocalDate, Int>, habit: Habit, run: Run, today: LocalDate, todayRow: Int) {
     div("grid") {
         for (c in 0 until WEEKS) {
             for (r in 0..6) {
                 val ago = c * 7 + todayRow - r
-                val value = days[today.minusDays(ago.toLong())] ?: 0
+                val value = coverOn(days, habit.cadence, today.minusDays(ago.toLong()))
                 when {
-                    // Later this week: a day that has not happened is not a miss.
+                    // A tick fills the whole stretch it covers, so a habit with
+                    // rest days draws one block rather than a dotted line.
+                    value > 0 -> div("cell") { style = "background: ${shade(habit.colour, value, habit.target)}" }
+                    // Later this week and not yet covered: not a miss, just not here.
                     ago < 0 -> div("cell pad")
-                    ago == 0 && value == 0 -> div("cell open")
-                    else -> div("cell") { style = "background: ${shade(habit.colour, value, habit.target)}" }
+                    // Dashed only while the run is alive and today is what it is
+                    // waiting on. On a dead row it would just be noise.
+                    ago == 0 && run.pending -> div("cell open")
+                    else -> div("cell") { style = "background: var(--empty)" }
                 }
             }
         }
     }
 }
 
-private fun DIV.bar(days: Map<LocalDate, Int>, today: LocalDate, todayRow: Int) {
+private fun DIV.bar(days: Map<LocalDate, Int>, habit: Habit, run: Run, today: LocalDate, todayRow: Int) {
     div("strip") {
-        segments(days, today, (WEEKS - 1) * 7 + todayRow).forEach { seg ->
+        segments(days, habit.cadence, run, today, (WEEKS - 1) * 7 + todayRow).forEach { seg ->
             div("bar ${seg.kind}") { style = "width: ${seg.days * PITCH - 3}px" }
         }
     }
+}
+
+/**
+ * What a day is worth once cadence is taken into account: the value of the most
+ * recent tick still covering it, or zero if the habit had lapsed by then.
+ */
+private fun coverOn(days: Map<LocalDate, Int>, cadence: Int, day: LocalDate): Int {
+    for (back in 0 until cadence) {
+        val value = days[day.minusDays(back.toLong())] ?: 0
+        if (value > 0) return value
+    }
+    return 0
 }
 
 private class Segment(val kind: String, val days: Int)
@@ -153,12 +170,12 @@ private class Segment(val kind: String, val days: Int)
  * newest first. Today is its own segment while it is still untouched, because a
  * day in progress is not yet a gap.
  */
-private fun segments(days: Map<LocalDate, Int>, today: LocalDate, maxAgo: Int): List<Segment> {
+private fun segments(days: Map<LocalDate, Int>, cadence: Int, run: Run, today: LocalDate, maxAgo: Int): List<Segment> {
     val out = mutableListOf<Segment>()
     for (ago in 0..maxAgo) {
-        val done = (days[today.minusDays(ago.toLong())] ?: 0) > 0
+        val done = coverOn(days, cadence, today.minusDays(ago.toLong())) > 0
         val kind = when {
-            ago == 0 && !done -> "open"
+            ago == 0 && !done -> if (run.pending) "open" else "gap"
             done -> "run"
             else -> "gap"
         }
@@ -181,26 +198,29 @@ private fun shade(colour: String, value: Int, target: Int): String {
 
 /**
  * The current run only, snapstreak style: a miss resets it to zero and takes the
- * history with it. [pending] means the run reaches yesterday and today has not
- * been ticked yet, which is not a miss until the day is over.
+ * history with it. [length] counts ticks rather than days, so a habit with rest
+ * days and a daily one both read as the number of times the habit came round and
+ * was kept. [pending] means the run is alive but today is not covered yet.
  */
 private data class Run(val length: Int, val pending: Boolean) {
-    val offset = if (pending) 1 else 0
     val state = if (length == 0) "cold" else if (pending) "pending" else "hot"
 }
 
-private fun runOf(days: Map<LocalDate, Int>, today: LocalDate): Run {
-    // Any progress keeps the run alive: 2 of 3 is still a day you showed up, and
-    // the streak is about showing up. The target only sets the tick cycle.
-    fun done(day: LocalDate) = (days[day] ?: 0) > 0
+private fun runOf(days: Map<LocalDate, Int>, cadence: Int, today: LocalDate): Run {
+    val ticks = days.filterValues { it > 0 }.keys.filter { it <= today }.sortedDescending()
+    val last = ticks.firstOrNull() ?: return Run(0, false)
 
-    val pending = !done(today) && done(today.minusDays(1))
-    val end = if (pending) today.minusDays(1) else today
-    if (!done(end)) return Run(0, false)
+    // Coverage runs forward from a tick, so the run survives while it still
+    // reaches yesterday: today is the day the habit comes due, not the day it is
+    // lost. At cadence 1 that is the ordinary "ticked today or yesterday".
+    if (last < today.minusDays(cadence.toLong())) return Run(0, false)
 
-    var length = 0
-    while (length < DAYS && done(end.minusDays(length.toLong()))) length++
-    return Run(length, pending)
+    var length = 1
+    for (i in 1 until ticks.size) {
+        if (ticks[i - 1].toEpochDay() - ticks[i].toEpochDay() > cadence) break
+        length++
+    }
+    return Run(length, last < today.minusDays((cadence - 1).toLong()))
 }
 
 // Material Symbols glyphs live in the private use area, and icons.woff2 is

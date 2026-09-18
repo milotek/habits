@@ -10,6 +10,8 @@ data class Habit(
     val name: String,
     val icon: String,
     val target: Int,
+    /** How many days one tick covers. 1 is daily; 2 is every other day. */
+    val cadence: Int,
     val colour: String,
 )
 
@@ -51,6 +53,12 @@ class Db(path: String) {
             // `midnight` was renamed to `sleep`. Renaming the row rather than
             // seeding a new slug is what keeps the habit's completions attached.
             st.executeUpdate("update habits set slug = 'sleep' where slug = 'midnight'")
+            val columns = st.executeQuery("pragma table_info(habits)").use { rs ->
+                buildList { while (rs.next()) add(rs.getString("name")) }
+            }
+            if ("cadence" !in columns) {
+                st.executeUpdate("alter table habits add column cadence integer not null default 1")
+            }
         }
         seed()
     }
@@ -60,10 +68,11 @@ class Db(path: String) {
         // rows that already exist. `name` is left alone: it is the one column
         // meant to be edited on the server.
         val sql = """
-            insert into habits (slug, name, icon, target, colour, position) values (?, ?, ?, ?, ?, ?)
+            insert into habits (slug, name, icon, target, cadence, colour, position) values (?, ?, ?, ?, ?, ?, ?)
             on conflict(slug) do update set
               icon = excluded.icon,
               target = excluded.target,
+              cadence = excluded.cadence,
               colour = excluded.colour,
               position = excluded.position
         """.trimIndent()
@@ -73,8 +82,9 @@ class Db(path: String) {
                 ps.setString(2, h.slug)
                 ps.setString(3, h.icon)
                 ps.setInt(4, h.target)
-                ps.setString(5, h.colour)
-                ps.setInt(6, i)
+                ps.setInt(5, h.cadence)
+                ps.setString(6, h.colour)
+                ps.setInt(7, i)
                 ps.addBatch()
             }
             ps.executeBatch()
@@ -91,7 +101,7 @@ class Db(path: String) {
 
     fun habits(): List<Habit> = synchronized(conn) {
         conn.createStatement().use { st ->
-            val rs = st.executeQuery("select id, slug, name, icon, target, colour from habits order by position")
+            val rs = st.executeQuery("select id, slug, name, icon, target, cadence, colour from habits order by position")
             buildList {
                 while (rs.next()) {
                     add(
@@ -101,6 +111,7 @@ class Db(path: String) {
                             name = rs.getString("name"),
                             icon = rs.getString("icon"),
                             target = rs.getInt("target"),
+                            cadence = rs.getInt("cadence"),
                             colour = rs.getString("colour"),
                         )
                     )
@@ -158,6 +169,8 @@ private data class Seed(
     val slug: String,
     val icon: String,
     val target: Int,
+    /** How many days one tick covers. 1 is daily; 2 is every other day. */
+    val cadence: Int,
     val colour: String,
 )
 
@@ -167,14 +180,16 @@ private data class Seed(
 //
 // Catppuccin Mocha accents walked in palette order from red to mauve, so the
 // board reads top to bottom as a rainbow. target > 1 makes a habit a counter:
-// it takes that many taps to cycle a day back to empty.
+// it takes that many taps to cycle a day back to empty. cadence > 1 makes one
+// tick last that many days, which is how a habit with rest days keeps a streak:
+// 2 is every other day, 7 is weekly, 30 is monthly.
 private val SEED = listOf(
-    Seed("clean", "block", 1, "#f38ba8"),
-    Seed("wake", "light_mode", 1, "#fab387"),
-    Seed("sleep", "dark_mode", 1, "#f9e2af"),
-    Seed("gym", "fitness_center", 1, "#a6e3a1"),
-    Seed("leetcode", "code", 3, "#94e2d5"),
-    Seed("cls", "bolt", 2, "#74c7ec"),
-    Seed("office", "work", 1, "#89b4fa"),
-    Seed("note", "edit", 1, "#cba6f7"),
+    Seed("clean", "block", 1, 1, "#f38ba8"),
+    Seed("wake", "light_mode", 1, 1, "#fab387"),
+    Seed("sleep", "dark_mode", 1, 1, "#f9e2af"),
+    Seed("gym", "fitness_center", 1, 2, "#a6e3a1"),
+    Seed("leetcode", "code", 3, 1, "#94e2d5"),
+    Seed("cls", "bolt", 2, 1, "#74c7ec"),
+    Seed("office", "work", 1, 1, "#89b4fa"),
+    Seed("note", "edit", 1, 1, "#cba6f7"),
 )
