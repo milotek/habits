@@ -9,6 +9,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.html.*
+import java.security.MessageDigest
 import java.time.LocalDate
 
 fun main() {
@@ -39,14 +40,24 @@ fun main() {
                 call.respondRedirect(if (call.request.queryParameters.contains("kiosk")) "/?kiosk" else "/")
             }
 
-            get("/icons.woff2") {
-                val bytes = checkNotNull(Db::class.java.getResourceAsStream("/icons.woff2")).readBytes()
+            get(ICONS_PATH) {
                 call.response.header(HttpHeaders.CacheControl, "public, max-age=31536000, immutable")
-                call.respondBytes(bytes, ContentType("font", "woff2"))
+                call.respondBytes(ICONS, ContentType("font", "woff2"))
             }
         }
     }.start(wait = true)
 }
+
+private val ICONS: ByteArray =
+    checkNotNull(Db::class.java.getResourceAsStream("/icons.woff2")).readBytes()
+
+// The font is served under a hash of its own bytes so that caching it for a
+// year is actually safe. Re-subsetting it moves the URL, which is what stops a
+// kiosk that has been open for weeks from drawing blanks where the new glyphs
+// should be: it holds the old file, and the old file has no such codepoints.
+private val ICONS_PATH: String = "/icons." +
+    MessageDigest.getInstance("SHA-256").digest(ICONS).take(6).joinToString("") { "%02x".format(it) } +
+    ".woff2"
 
 // How far back a run is allowed to be counted. Nothing on the display depends
 // on older days, so this is the whole history the page needs to load.
@@ -175,7 +186,7 @@ private fun glyph(name: String) = GLYPHS[name] ?: "?"
 private val CSS = """
     @font-face {
       font-family: 'Material Symbols Outlined';
-      src: url('/icons.woff2') format('woff2');
+      src: url('$ICONS_PATH') format('woff2');
       font-display: block;
     }
     :root { --bg: #11111b; --fg: #cdd6f4; --cold: #313244; --gone: #585b70; }
