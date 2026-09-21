@@ -190,6 +190,6 @@ private val SEED = listOf(
     Seed("gym", "fitness_center", 1, 2, "#a6e3a1"),
     Seed("leetcode", "code", 3, 1, "#94e2d5"),
     Seed("cls", "bolt", 2, 1, "#74c7ec"),
-    Seed("office", "work", 1, 1, "#89b4fa"),
+    Seed("office", "work", 1, 2, "#89b4fa"),
     Seed("note", "edit", 1, 1, "#cba6f7"),
 )
