@@ -98,6 +98,9 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                 }
             }
         }
+        // The kiosk already reloads on its own every minute; this is for not
+        // waiting out the rest of that minute after ticking from a phone.
+        if (kiosk) a("/?kiosk", classes = "icon refresh") { +"refresh" }
     }
 }
 
@@ -214,6 +217,7 @@ private val CSS = """
       flex: none;
     }
     .dead { opacity: 0.3; }
+    .refresh { position: fixed; right: 2rem; bottom: 2rem; font-size: 40px; color: var(--gone); text-decoration: none; }
     .tile {
       width: 88px;
       height: 88px;
