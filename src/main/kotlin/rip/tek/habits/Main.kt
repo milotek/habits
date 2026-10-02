@@ -9,7 +9,6 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.html.*
-import java.security.MessageDigest
 import java.time.LocalDate
 import kotlin.math.ceil
 
@@ -36,25 +35,9 @@ fun main() {
                 db.set(habit.id, day, next)
                 call.respondRedirect(if (call.request.queryParameters.contains("kiosk")) "/?kiosk" else "/")
             }
-
-            get(ICONS_PATH) {
-                call.response.header(HttpHeaders.CacheControl, "public, max-age=31536000, immutable")
-                call.respondBytes(ICONS, ContentType("font", "woff2"))
-            }
         }
     }.start(wait = true)
 }
-
-private val ICONS: ByteArray =
-    checkNotNull(Db::class.java.getResourceAsStream("/icons.woff2")).readBytes()
-
-// The font is served under a hash of its own bytes so that caching it for a
-// year is actually safe. Re-subsetting it moves the URL, which is what stops a
-// kiosk that has been open for weeks from drawing blanks where the new glyphs
-// should be: it holds the old file, and the old file has no such codepoints.
-private val ICONS_PATH: String = "/icons." +
-    MessageDigest.getInstance("SHA-256").digest(ICONS).take(6).joinToString("") { "%02x".format(it) } +
-    ".woff2"
 
 // How far back a run is allowed to be counted. Nothing on the display depends
 // on older days, so this is the whole history the page needs to load.
@@ -73,6 +56,14 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
     head {
         title("habits")
         meta(name = "viewport", content = "width=device-width, initial-scale=1")
+        // The axes are pinned in the URL rather than chosen here, so the served
+        // file is the one weight the board draws. display=block is what keeps
+        // the icon's own name off the wall while the font is still in flight.
+        link(
+            rel = "stylesheet",
+            href = "https://fonts.googleapis.com/css2" +
+                "?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,300,0,0&display=block",
+        )
         // The display reloads itself so that ticks made from a phone show up on
         // the wall without anyone walking over to it.
         if (kiosk) {
@@ -95,7 +86,7 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                 ) {
                     style = "--c: ${habit.colour}"
                     div("head") {
-                        span("icon" + if (run.length == 0) " dead" else "") { +glyph(habit.icon) }
+                        span("icon" + if (run.length == 0) " dead" else "") { +habit.icon }
                         button(classes = "tile ${run.state}") { +run.length.toString() }
                     }
                     // Both views are always rendered; the belt slides whichever
@@ -196,28 +187,7 @@ private fun runOf(days: Map<LocalDate, Int>, cadence: Int, today: LocalDate): Ru
     return Run(length, (oldest - (if (pending) 1 else 0) + 1).toInt(), pending)
 }
 
-// Material Symbols glyphs live in the private use area, and icons.woff2 is
-// subset to exactly these eight. Addressing them by codepoint rather than by
-// ligature is what lets the subset drop its layout tables.
-private val GLYPHS = mapOf(
-    "block" to "",
-    "light_mode" to "",
-    "dark_mode" to "",
-    "fitness_center" to "",
-    "code" to "",
-    "bolt" to "",
-    "work" to "",
-    "edit" to "",
-)
-
-private fun glyph(name: String) = GLYPHS[name] ?: "?"
-
 private val CSS = """
-    @font-face {
-      font-family: 'Material Symbols Outlined';
-      src: url('$ICONS_PATH') format('woff2');
-      font-display: block;
-    }
     :root { --bg: #11111b; --fg: #cdd6f4; --empty: #313244; --gone: #585b70; }
     body {
       background: var(--bg);
@@ -235,6 +205,9 @@ private val CSS = """
     .icon {
       font-family: 'Material Symbols Outlined';
       font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+      /* The glyph is a ligature over the icon's name, and letter-spacing breaks
+         a ligature back into the letters it was made from. */
+      letter-spacing: normal;
       font-size: 24px;
       line-height: 1;
       color: var(--c);
