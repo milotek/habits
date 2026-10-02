@@ -29,11 +29,7 @@ fun main() {
                     call.respond(HttpStatusCode.NotFound)
                     return@post
                 }
-                val day = call.receiveParameters()["day"]?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-                if (day == null) {
-                    call.respond(HttpStatusCode.BadRequest)
-                    return@post
-                }
+                val day = LocalDate.now()
                 // Wrapping past target back to zero is the only way to undo a
                 // mistap: there is no separate clear button on the display.
                 val next = (db.valueOn(habit.id, day) + 1) % (habit.target + 1)
@@ -100,10 +96,7 @@ private fun HTML.board(db: Db, kiosk: Boolean) {
                     style = "--c: ${habit.colour}"
                     div("head") {
                         span("icon" + if (run.length == 0) " dead" else "") { +glyph(habit.icon) }
-                        button(name = "day", classes = "tile ${run.state}") {
-                            value = today.toString()
-                            +run.length.toString()
-                        }
+                        button(classes = "tile ${run.state}") { +run.length.toString() }
                     }
                     // Both views are always rendered; the belt slides whichever
                     // one is off-screen, so nothing left of the pane can move.
